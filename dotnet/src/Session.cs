@@ -59,6 +59,7 @@ public partial class CopilotSession : IAsyncDisposable
     private readonly SemaphoreSlim _hooksLock = new(1, 1);
     private SessionRpc? _sessionRpc;
     private int _isDisposed;
+    private int _isShutdown;
 
     /// <summary>
     /// Gets the unique identifier for this session.
@@ -524,6 +525,42 @@ public partial class CopilotSession : IAsyncDisposable
     }
 
     /// <summary>
+    /// Shuts down this session on the server without clearing local event handlers.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Call this before <see cref="DisposeAsync"/> when you want to observe the
+    /// <see cref="SessionShutdownEvent"/>. The event is dispatched to registered handlers
+    /// after this method returns. Once you have processed the event, call
+    /// <see cref="DisposeAsync"/> to clear handlers and release local resources.
+    /// </para>
+    /// <para>
+    /// If the session has already been shut down, this is a no-op.
+    /// </para>
+    /// </remarks>
+    /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
+    /// <returns>A task representing the asynchronous shutdown operation.</returns>
+    /// <example>
+    /// <code>
+    /// var shutdownTcs = new TaskCompletionSource();
+    /// session.On(evt => { if (evt is SessionShutdownEvent) shutdownTcs.TrySetResult(); });
+    /// await session.ShutdownAsync();
+    /// await shutdownTcs.Task;
+    /// await session.DisposeAsync();
+    /// </code>
+    /// </example>
+    public async Task ShutdownAsync(CancellationToken cancellationToken = default)
+    {
+        if (Interlocked.Exchange(ref _isShutdown, 1) == 1)
+        {
+            return;
+        }
+
+        await InvokeRpcAsync<object>(
+            "session.destroy", [new SessionDestroyRequest() { SessionId = SessionId }], cancellationToken);
+    }
+
+    /// <summary>
     /// Disposes the <see cref="CopilotSession"/> and releases all associated resources.
     /// </summary>
     /// <returns>A task representing the dispose operation.</returns>
@@ -531,6 +568,11 @@ public partial class CopilotSession : IAsyncDisposable
     /// <para>
     /// After calling this method, the session can no longer be used. All event handlers
     /// and tool handlers are cleared.
+    /// </para>
+    /// <para>
+    /// If <see cref="ShutdownAsync"/> was not called first, this method calls it automatically.
+    /// In that case the <see cref="SessionShutdownEvent"/> may not be observed because handlers
+    /// are cleared immediately after the server responds.
     /// </para>
     /// <para>
     /// To continue the conversation, use <see cref="CopilotClient.ResumeSessionAsync"/>
@@ -557,8 +599,7 @@ public partial class CopilotSession : IAsyncDisposable
 
         try
         {
-            await InvokeRpcAsync<object>(
-                "session.destroy", [new SessionDestroyRequest() { SessionId = SessionId }], CancellationToken.None);
+            await ShutdownAsync();
         }
         catch (ObjectDisposedException)
         {

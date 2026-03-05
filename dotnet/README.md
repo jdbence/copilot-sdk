@@ -219,7 +219,11 @@ Get all events/messages from this session.
 
 ##### `DisposeAsync(): ValueTask`
 
-Dispose the session and free resources.
+Dispose the session and free resources. Calls `ShutdownAsync()` first if not already called.
+
+##### `ShutdownAsync(CancellationToken): Task`
+
+Shut down the session on the server without clearing local event handlers. Call this before `DisposeAsync()` when you want to observe the `SessionShutdownEvent`.
 
 ---
 

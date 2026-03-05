@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/github/copilot-sdk/go/internal/jsonrpc2"
@@ -64,6 +65,7 @@ type Session struct {
 	userInputMux      sync.RWMutex
 	hooks             *SessionHooks
 	hooksMux          sync.RWMutex
+	isShutdown        atomic.Bool
 
 	// RPC provides typed session-scoped RPC methods.
 	RPC *rpc.SessionRpc
@@ -511,11 +513,49 @@ func (s *Session) GetMessages(ctx context.Context) ([]SessionEvent, error) {
 	return response.Events, nil
 }
 
+// Shutdown ends this session on the server without clearing local event handlers.
+//
+// Call this before [Session.Destroy] when you want to observe the session.shutdown
+// event. The event is dispatched to registered handlers after this method returns.
+// Once you have processed the event, call [Session.Destroy] to clear handlers and
+// release local resources.
+//
+// If the session has already been shut down, this is a no-op.
+//
+// Returns an error if the connection fails.
+//
+// Example:
+//
+//	session.On(func(event copilot.SessionEvent) {
+//	    if event.Type == copilot.SessionShutdown {
+//	        fmt.Println("Shutdown metrics:", event.Data)
+//	    }
+//	})
+//	if err := session.Shutdown(); err != nil {
+//	    log.Printf("Failed to shut down session: %v", err)
+//	}
+//	// ... wait for the shutdown event ...
+//	session.Destroy()
+func (s *Session) Shutdown() error {
+	if s.isShutdown.Swap(true) {
+		return nil
+	}
+	_, err := s.client.Request("session.destroy", sessionDestroyRequest{SessionID: s.SessionID})
+	if err != nil {
+		return fmt.Errorf("failed to shut down session: %w", err)
+	}
+	return nil
+}
+
 // Destroy destroys this session and releases all associated resources.
 //
 // After calling this method, the session can no longer be used. All event
 // handlers and tool handlers are cleared. To continue the conversation,
 // use [Client.ResumeSession] with the session ID.
+//
+// If [Session.Shutdown] was not called first, this method calls it automatically.
+// In that case the session.shutdown event may not be observed because handlers
+// are cleared immediately after the server responds.
 //
 // Returns an error if the connection fails.
 //
@@ -526,9 +566,8 @@ func (s *Session) GetMessages(ctx context.Context) ([]SessionEvent, error) {
 //	    log.Printf("Failed to destroy session: %v", err)
 //	}
 func (s *Session) Destroy() error {
-	_, err := s.client.Request("session.destroy", sessionDestroyRequest{SessionID: s.SessionID})
-	if err != nil {
-		return fmt.Errorf("failed to destroy session: %w", err)
+	if err := s.Shutdown(); err != nil {
+		return err
 	}
 
 	// Clear handlers

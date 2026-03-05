@@ -267,7 +267,11 @@ Get all events/messages from this session.
 
 ##### `destroy(): Promise<void>`
 
-Destroy the session and free resources.
+Destroy the session and free resources. Calls `shutdown()` first if not already called.
+
+##### `shutdown(): Promise<void>`
+
+Shut down the session on the server without clearing local event handlers. Call this before `destroy()` when you want to observe the `session.shutdown` event.
 
 ---
 

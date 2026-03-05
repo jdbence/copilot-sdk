@@ -79,6 +79,8 @@ export class CopilotSession {
         private readonly _workspacePath?: string
     ) {}
 
+    private _isShutdown = false;
+
     /**
      * Typed session-scoped RPC methods.
      */
@@ -499,11 +501,48 @@ export class CopilotSession {
     }
 
     /**
+     * Shuts down this session on the server without clearing local event handlers.
+     *
+     * Call this before {@link destroy} when you want to observe the `session.shutdown`
+     * event. The event is dispatched to registered handlers after this method returns.
+     * Once you have processed the event, call {@link destroy} to clear handlers and
+     * release local resources.
+     *
+     * If the session has already been shut down, this is a no-op.
+     *
+     * @returns A promise that resolves when the server has acknowledged the shutdown
+     * @throws Error if the connection fails
+     *
+     * @example
+     * ```typescript
+     * session.on("session.shutdown", (event) => {
+     *   console.log("Shutdown metrics:", event.data.modelMetrics);
+     * });
+     * await session.shutdown();
+     * // ... wait for the shutdown event ...
+     * await session.destroy();
+     * ```
+     */
+    async shutdown(): Promise<void> {
+        if (this._isShutdown) {
+            return;
+        }
+        this._isShutdown = true;
+        await this.connection.sendRequest("session.destroy", {
+            sessionId: this.sessionId,
+        });
+    }
+
+    /**
      * Destroys this session and releases all associated resources.
      *
      * After calling this method, the session can no longer be used. All event
      * handlers and tool handlers are cleared. To continue the conversation,
      * use {@link CopilotClient.resumeSession} with the session ID.
+     *
+     * If {@link shutdown} was not called first, this method calls it automatically.
+     * In that case the `session.shutdown` event may not be observed because handlers
+     * are cleared immediately after the server responds.
      *
      * @returns A promise that resolves when the session is destroyed
      * @throws Error if the connection fails
@@ -515,9 +554,7 @@ export class CopilotSession {
      * ```
      */
     async destroy(): Promise<void> {
-        await this.connection.sendRequest("session.destroy", {
-            sessionId: this.sessionId,
-        });
+        await this.shutdown();
         this.eventHandlers.clear();
         this.typedEventHandlers.clear();
         this.toolHandlers.clear();
